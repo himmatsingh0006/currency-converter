@@ -19,10 +19,10 @@ const resultOutput = document.querySelector("#result");
 const rateText = document.querySelector("#rate-text");
 const updatedText = document.querySelector("#updated-text");
 const statusMessage = document.querySelector("#status-message");
-const convertButton = document.querySelector("#convert-button");
 const refreshButton = document.querySelector("#refresh-button");
 let currentRates = null;
 let currentBase = "";
+let latestRatesRequest = 0;
 
 function populateCurrencies(select, selectedCode) {
   for (const [code, name] of currencies) {
@@ -99,6 +99,7 @@ async function loadRates(forceRefresh = false) {
     return;
   }
 
+  const requestId = ++latestRatesRequest;
   statusMessage.textContent = "";
   refreshButton.classList.add("is-loading");
   refreshButton.disabled = true;
@@ -107,6 +108,10 @@ async function loadRates(forceRefresh = false) {
     const data = await response.json();
     if (!response.ok) {
       throw new Error(data.error || "Could not load exchange rates.");
+    }
+
+    if (requestId !== latestRatesRequest || fromSelect.value !== base) {
+      return;
     }
 
     currentRates = data.rates;
@@ -118,19 +123,22 @@ async function loadRates(forceRefresh = false) {
       : "Rates refresh every 10 minutes";
     renderConversion();
   } catch (error) {
-    resultOutput.textContent = "—";
-    rateText.textContent = "Exchange rate unavailable";
-    statusMessage.textContent = error.message;
+    if (requestId === latestRatesRequest && fromSelect.value === base) {
+      resultOutput.textContent = "—";
+      rateText.textContent = "Exchange rate unavailable";
+      statusMessage.textContent = error.message;
+    }
   } finally {
-    refreshButton.classList.remove("is-loading");
-    refreshButton.disabled = false;
+    if (requestId === latestRatesRequest) {
+      refreshButton.classList.remove("is-loading");
+      refreshButton.disabled = false;
+    }
   }
 }
 
 fromSelect.addEventListener("change", () => loadRates());
 toSelect.addEventListener("change", renderConversion);
 amountInput.addEventListener("input", renderConversion);
-convertButton.addEventListener("click", renderConversion);
 refreshButton.addEventListener("click", () => loadRates(true));
 
 document.querySelector("#swap-button").addEventListener("click", () => {
