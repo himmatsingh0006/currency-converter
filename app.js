@@ -20,6 +20,7 @@ const rateText = document.querySelector("#rate-text");
 const updatedText = document.querySelector("#updated-text");
 const statusMessage = document.querySelector("#status-message");
 const refreshButton = document.querySelector("#refresh-button");
+
 let currentRates = null;
 let currentBase = "";
 let latestRatesRequest = 0;
@@ -37,10 +38,14 @@ function populateCurrencies(select, selectedCode) {
 
 function addAvailableCurrencies(rates) {
   const knownCodes = new Set(currencies.map(([code]) => code));
-  const additionalCodes = Object.keys(rates).filter((code) => !knownCodes.has(code)).sort();
+  const additionalCodes = Object.keys(rates)
+    .filter((code) => !knownCodes.has(code))
+    .sort();
+
   for (const select of [fromSelect, toSelect]) {
     const selectedCode = select.value;
     for (const code of additionalCodes) {
+      if (select.querySelector(`option[value="${code}"]`)) continue;
       const option = document.createElement("option");
       option.value = code;
       option.textContent = code;
@@ -79,9 +84,9 @@ function renderConversion() {
     return;
   }
 
-  const sourceRate = currentRates[from];
-  const targetRate = currentRates[to];
-  if (!sourceRate || !targetRate) {
+  const sourceRate = Number(currentRates[from]);
+  const targetRate = Number(currentRates[to]);
+  if (!Number.isFinite(sourceRate) || !Number.isFinite(targetRate) || sourceRate <= 0 || targetRate <= 0) {
     resultOutput.textContent = "—";
     statusMessage.textContent = "This currency is not available right now. Please choose another.";
     return;
@@ -101,32 +106,49 @@ async function loadRates(forceRefresh = false) {
 
   const requestId = ++latestRatesRequest;
   statusMessage.textContent = "";
+  rateText.textContent = "Fetching the latest exchange rate…";
   refreshButton.classList.add("is-loading");
   refreshButton.disabled = true;
+
   try {
-    const response = await fetch(`/api/rates?base=${encodeURIComponent(base)}${forceRefresh ? `&refresh=${Date.now()}` : ""}`);
-    const data = await response.json();
+    // Call the public exchange-rate API directly. This works on Vercel static hosting
+    // and does not depend on the local Python /api/rates route.
+    const response = await fetch(`https://open.er-api.com/v6/latest/${encodeURIComponent(base)}`, {
+      method: "GET",
+      headers: { Accept: "application/json" },
+      cache: forceRefresh ? "no-store" : "default",
+    });
+
     if (!response.ok) {
-      throw new Error(data.error || "Could not load exchange rates.");
+      throw new Error(`Exchange-rate service error (HTTP ${response.status}). Please try again.`);
     }
 
-    if (requestId !== latestRatesRequest || fromSelect.value !== base) {
-      return;
+    const data = await response.json();
+    if (data.result !== "success" || !data.rates || typeof data.rates !== "object") {
+      throw new Error(data['error-type'] || "The exchange-rate service returned an unexpected response.");
     }
+
+    if (requestId !== latestRatesRequest || fromSelect.value !== base) return;
 
     currentRates = data.rates;
-    currentBase = data.base;
+    currentBase = data.base_code || base;
     addAvailableCurrencies(currentRates);
-    const updated = data.updated ? new Date(data.updated) : null;
+
+    const updated = data.time_last_update_utc ? new Date(data.time_last_update_utc) : null;
     updatedText.textContent = updated && !Number.isNaN(updated.getTime())
-      ? `Updated ${new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(updated)}`
-      : "Rates refresh every 10 minutes";
+      ? `Rates updated ${new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(updated)}`
+      : "Rates provided by ExchangeRate-API";
+
     renderConversion();
   } catch (error) {
     if (requestId === latestRatesRequest && fromSelect.value === base) {
+      currentRates = null;
+      currentBase = "";
       resultOutput.textContent = "—";
       rateText.textContent = "Exchange rate unavailable";
-      statusMessage.textContent = error.message;
+      statusMessage.textContent = error instanceof TypeError
+        ? "Could not connect to the exchange-rate service. Check your internet connection and try again."
+        : error.message;
     }
   } finally {
     if (requestId === latestRatesRequest) {
